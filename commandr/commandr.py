@@ -122,12 +122,19 @@
 # main:
 #   If set, Commandr will use the supplied value as the command name to run
 #   if no command name is supplied.  It will override any previous values.
+#
+# extra_options:
+#   If True, extra options will be made available to commands.  
+#   Default is False.
+
 
 from collections import namedtuple
 import inspect
 import itertools
 from optparse import OptionParser, SUPPRESS_HELP
 import sys
+from timeit import Timer
+from datetime import timedelta
 
 class CommandInfo(
   namedtuple('BaseCommandInfo',
@@ -158,6 +165,7 @@ class Commandr(object):
     self.ignore_self = False
     self.main_docs = True
     self.main = None
+    self.extra_options = False
 
     # Internal flag indicating whether to expect the command name as the first
     # command line argument.
@@ -240,7 +248,8 @@ class Commandr(object):
       show_all_help_variants=None,
       ignore_self=None,
       main_docs=None,
-      main=None):
+      main=None,
+      extra_options=None):
     """Set commandr options. Any argument not set to None will be applied
     (otherwise it will retain its current value).
 
@@ -258,6 +267,8 @@ class Commandr(object):
           command is specified.  Default is True.
       main - If set, it will use the supplied value as the command name to run
           if no command name is supplied.  It will override any previous values.
+      extra_options - If True, extra options will be made available to commands.  
+          Default is False.
     """
     # Anything added here should also be added to the RunFunction interface.
     if hyphenate is not None:
@@ -270,6 +281,8 @@ class Commandr(object):
       self.main_docs = main_docs
     if main is not None:
       self.main = main
+    if extra_options is not None:
+      self.extra_options = extra_options
 
   def Run(self, *args, **kwargs):
     """Main function to take command line arguments, and parse them into a
@@ -314,7 +327,8 @@ class Commandr(object):
       show_all_help_variants=None,
       ignore_self=None,
       main_doc=None,
-      main=None):
+      main=None,
+      extra_options=None):
     """Method to explicitly execute a given function against the command line
     arguments. If this method is called directly, the command name will not be
     expected in the arguments.
@@ -332,6 +346,8 @@ class Commandr(object):
           command is specified.  Default is True.
       main - If set, it will use the supplied value as the command name to run
           if no command name is supplied.  It will override any previous values.
+      extra_options - If True, extra options will be made available to commands.  
+          Default is False.
     """
     info = self._all_commands.get(cmd_name)
     if not info:
@@ -352,6 +368,11 @@ class Commandr(object):
       self._HelpExitCommand(None, info.name, info.callable)
     elif 'help' in options_dict:
       del options_dict['help']
+
+    timeit = False
+    if 'timeit' in options_dict:
+      timeit = options_dict['timeit']
+      del options_dict['timeit']
 
     ignore = (info.ignore_self
               if info.ignore_self is not None
@@ -410,15 +431,24 @@ class Commandr(object):
     for key, value in options_dict.iteritems():
       if value is None:
         if key not in defaults_dict:
-          self._HelpExitCommand(
-            "All options without default values must be specified",
+          self._HelpExitCommand("Option '" + key + "' is missing.\n" +
+            "All options without default values must be specified.",
             info.name, info.callable, options_dict, argspec.args)
         elif defaults_dict[key] is not None:
           options_dict[key] = defaults_dict[key]
 
     self.current_command = info
     try:
-      result = info.callable(**options_dict)
+      self.temp_result = ""   # use an instance var to store result from wrapper
+      if timeit:
+        def wrapper():
+            self.temp_result = info.callable(**options_dict)
+        timer = Timer(wrapper)
+        delta = timer.timeit(1)
+        print "Time taken is: ", timedelta(seconds = delta)
+        result=self.temp_result
+      else:
+        result = info.callable(**options_dict)
     except CommandrUsageError as e:
       self.Usage(str(e) or None)
 
@@ -515,6 +545,11 @@ class Commandr(object):
                            type=arg_type, help='[default: %s]' % (help_str))
       else:
         self._AddOption(args, dest=arg)
+
+    if self.extra_options:
+      defaults_dict["timeit"]=False
+      self._AddOption(['--timeit'], dest='timeit', action='store_true',
+                       default=False, help="Time the duration of the command.")
 
     return argspec, defaults_dict
 
